@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TransferLedger.Api/TransferLedger.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TransferLedger.Tests/TransferLedger.Tests.csproj" />
+  </Folder>
+</Solution>
