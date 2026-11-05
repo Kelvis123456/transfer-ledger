@@ -1,22 +1,24 @@
+Español: [README.es.md](README.es.md)
+
 # transfer-ledger
 
-Un libro mayor de partida doble con transferencias entre cuentas por alias (un teléfono o un correo), con claves de idempotencia y una conciliación que comprueba que los números cuadran. Es una API en .NET 10 sobre PostgreSQL.
+A double-entry ledger with transfers between accounts by alias (a phone number or an email), idempotency keys, and a reconciliation that checks the numbers add up. It's a .NET 10 API on PostgreSQL.
 
-Lo hice para ver, con pruebas, qué hace falta para que mover dinero no se pueda hacer mal: que dos peticiones iguales no muevan el dinero dos veces, que mil peticiones a la vez no dejen una cuenta en negativo y que la base misma se niegue a guardar algo que no cuadra, aunque el código tenga un bug. Lo inspiró la idea de los pagos instantáneos por alias; no sigue la especificación de ningún sistema real.
+I built it to see, with tests, what it takes to make moving money hard to get wrong: two identical requests must not move the money twice, a thousand simultaneous requests must not leave an account negative, and the database itself must refuse to store something that doesn't balance, even if the code has a bug. It was inspired by the idea of instant payments by alias; it doesn't follow the specification of any real system.
 
-**Stack:** .NET 10 · ASP.NET Core minimal APIs · Npgsql (SQL a mano, sin ORM) · PostgreSQL · xUnit + Testcontainers
+**Stack:** .NET 10 · ASP.NET Core minimal APIs · Npgsql (hand-written SQL, no ORM) · PostgreSQL · xUnit + Testcontainers
 
-## Cómo funciona
+## How it works
 
-| Endpoint | Para qué |
+| Endpoint | Purpose |
 |---|---|
-| `POST /api/accounts` | Crea una cuenta con un alias |
-| `POST /api/accounts/{alias}/deposit` | Acredita dinero desde la cuenta `@bank` |
-| `POST /api/transfers` | Mueve dinero entre dos cuentas |
-| `GET /api/accounts/{alias}` | Saldo y últimos 20 asientos |
-| `GET /api/reconciliation` | Comprueba que los asientos suman cero y que cada saldo es la suma de los suyos |
+| `POST /api/accounts` | Creates an account with an alias |
+| `POST /api/accounts/{alias}/deposit` | Credits money from the `@bank` account |
+| `POST /api/transfers` | Moves money between two accounts |
+| `GET /api/accounts/{alias}` | Balance and last 20 entries |
+| `GET /api/reconciliation` | Checks that entries sum to zero and that each balance is the sum of its own entries |
 
-Los montos van en centavos (`bigint`). Todo lo de `/api` pide `X-Api-Key`. Las transferencias y los depósitos piden además `Idempotency-Key`.
+Amounts are in cents (`bigint`). Everything under `/api` requires `X-Api-Key`. Transfers and deposits also require `Idempotency-Key`.
 
 ```
 POST /api/transfers
@@ -26,14 +28,14 @@ Idempotency-Key: 7c1f...
 201 { "transferId": "...", "from": "8095551234", "to": "maria@mail.com", "amount": 250000 }
 ```
 
-- **Partida doble.** Cada transferencia son dos asientos, uno negativo y otro positivo, que suman cero. Un depósito no es un `UPDATE` suelto: es una transferencia desde `@bank`, la única cuenta que puede quedar en negativo.
-- **Idempotencia.** La clave se inserta dentro de la misma transacción que la transferencia. Una segunda petición con la misma clave espera en el índice único hasta que la primera confirme y entonces recibe la misma respuesta. La misma clave con otro monto o destino da 422.
-- **Concurrencia.** Las dos cuentas se bloquean con `SELECT ... FOR UPDATE` y se comprueba el saldo bajo ese bloqueo.
-- **La base como última defensa.** Un `CHECK` impide saldos negativos, un trigger diferido rechaza asientos que no suman cero al confirmar, y otro trigger vuelve `entries` y `transfers` solo de inserción.
+- **Double entry.** Every transfer is two entries, one negative and one positive, that sum to zero. A deposit isn't a loose `UPDATE`: it is a transfer from `@bank`, the only account that can go negative.
+- **Idempotency.** The key is inserted inside the same transaction as the transfer. A second request with the same key waits on the unique index until the first one commits and then gets the same response. The same key with a different amount or destination returns 422.
+- **Concurrency.** Both accounts are locked with `SELECT ... FOR UPDATE` and the balance is checked under that lock.
+- **The database as the last line of defense.** A `CHECK` prevents negative balances, a deferred trigger rejects entries that don't sum to zero at commit, and another trigger makes `entries` and `transfers` insert-only.
 
-## Cómo correrlo
+## How to run it
 
-Necesitas .NET 10 y Docker para los tests.
+You need .NET 10, and Docker for the tests.
 
 ```bash
 docker run -d --name ledger-db -e POSTGRES_PASSWORD=postgres -p 5433:5432 postgres:17-alpine
@@ -41,32 +43,32 @@ ConnectionStrings__Db="Host=localhost;Port=5433;Username=postgres;Password=postg
   dotnet run --project src/TransferLedger.Api
 ```
 
-En desarrollo no pide `X-Api-Key`; fuera de desarrollo la app no arranca sin `Auth__ApiKey`.
+In development it doesn't require `X-Api-Key`; outside development the app won't start without `Auth__ApiKey`.
 
 ```bash
 dotnet test
 ```
 
-Los tests levantan su propio Postgres con Testcontainers.
+The tests start their own Postgres with Testcontainers.
 
-## Qué prueban los tests
+## What the tests check
 
-38 pruebas contra un Postgres real:
+38 tests against a real Postgres:
 
-- **Transferencias:** saldo y asientos, saldo insuficiente, cuenta inexistente (y que el fallo no gaste la clave), montos fuera de rango, misma cuenta, alias inválidos y normalización de teléfonos.
-- **Idempotencia:** repetir, otro monto, otro destino, clave inválida y 40 peticiones simultáneas con la misma clave.
-- **Concurrencia:** 60 transferencias contra un saldo para 30 (exactamente 30 pasan y el saldo nunca es negativo), transferencias cruzadas A→B y B→A a la vez sin interbloqueo, y varios destinos desde el mismo origen.
-- **Integridad:** la conciliación detecta un saldo alterado a mano, la base rechaza asientos que no suman cero, `UPDATE` y `DELETE` sobre asientos y transferencias fallan, y un saldo negativo se rechaza aunque se salte el código.
+- **Transfers:** balance and entries, insufficient funds, nonexistent account (and that the failure doesn't consume the key), amounts out of range, same account, invalid aliases and phone number normalization.
+- **Idempotency:** repeat, different amount, different destination, invalid key and 40 simultaneous requests with the same key.
+- **Concurrency:** 60 transfers against a balance that covers 30 (exactly 30 succeed and the balance is never negative), crossed A→B and B→A transfers at the same time with no deadlock, and several destinations from the same source.
+- **Integrity:** reconciliation detects a balance altered by hand, the database rejects entries that don't sum to zero, `UPDATE` and `DELETE` on entries and transfers fail, and a negative balance is rejected even if the code is bypassed.
 
-Para comprobar que las pruebas pueden fallar quité a propósito partes del código. Sin `FOR UPDATE` fallan las de concurrencia y sin el `ON CONFLICT` de la clave fallan las de idempotencia. Sin el `ORDER BY id` del bloqueo todas siguen pasando: el plan de Postgres recorre las filas en un orden estable y las dos transacciones cruzadas no se bloquean entre sí. Lo dejé como defensa explícita y lo dice el comentario del código; no es algo que una prueba demuestre.
+To check that the tests can fail, I deliberately removed parts of the code. Without `FOR UPDATE` the concurrency tests fail, and without the key's `ON CONFLICT` the idempotency tests fail. Without the `ORDER BY id` in the locking, all of them still pass: Postgres's plan walks the rows in a stable order and the two crossed transactions don't block each other. I kept it as an explicit defense and the code comment says so; it isn't something a test demonstrates.
 
-## Lo que no es
+## What it is not
 
-- **No sigue ninguna especificación real.** Ni la del sistema de pagos instantáneos del Banco Central ni la de ninguna red de pagos. No hay comisiones, límites diarios, detección de fraude ni verificación de que un alias pertenezca a quien dice.
-- **Una sola moneda y sin usuarios.** Una clave de API compartida protege toda la API; no hay cuentas de cliente ni permisos por cuenta.
-- **Los errores de negocio no se guardan.** Un 404 o un 422 revierte la transacción entera, clave incluida, así que reintentar después de corregir el problema funciona. Solo las transferencias exitosas quedan registradas con su clave, y esas claves no caducan.
-- **No medí rendimiento.** Las pruebas de concurrencia usan decenas de peticiones, no miles, y no hay una prueba de carga. No sé cuántas transferencias por segundo aguanta, y no lo afirmo.
-- **Sin límite de peticiones ni paginación** (`GET /accounts/{alias}` devuelve los últimos 20 asientos).
-- **No está desplegado.**
+- **It doesn't follow any real specification.** Not the Central Bank's instant payment system nor that of any payment network. There are no fees, daily limits, fraud detection, or verification that an alias belongs to whoever claims it.
+- **One currency and no users.** A single shared API key protects the whole API; there are no customer accounts and no per-account permissions.
+- **Business errors aren't stored.** A 404 or a 422 rolls back the whole transaction, key included, so retrying after fixing the problem works. Only successful transfers are recorded with their key, and those keys don't expire.
+- **I didn't measure performance.** The concurrency tests use dozens of requests, not thousands, and there is no load test. I don't know how many transfers per second it handles, and I don't claim to.
+- **No rate limiting or pagination** (`GET /accounts/{alias}` returns the last 20 entries).
+- **It isn't deployed.**
 
-Las decisiones y lo que descarté están en [docs/decisions.md](docs/decisions.md).
+The decisions and what I ruled out are in [docs/decisions.md](docs/decisions.md).
